@@ -1,0 +1,2 @@
+spotipy==2.25.1
+argparse==1.4.0

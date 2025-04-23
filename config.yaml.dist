@@ -1,0 +1,5 @@
+client_id: "<spotify client id>"
+client_secret: "<spotify client secret>"
+username: "<spotify username>"
+playlists:
+  - "<playlist name>"
