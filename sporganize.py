@@ -20,6 +20,9 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+# Cache for playlist contents to avoid repeated API calls
+PLAYLIST_CONTENT_CACHE = {}
+
 # Constants for Spotify authentication
 SPOTIFY_SCOPE = 'playlist-read-private playlist-modify-private playlist-modify-public'
 SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8080/callback'
@@ -65,7 +68,7 @@ def get_spotify_client():
         print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
         print("")
         sys.exit(1)
-    
+
     if token:
         return spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
     else:
@@ -187,16 +190,44 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
                                     print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Move: {artist_name} - {track_name} [{year}]")
                                     sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
                                     sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
+
+                                    # Clear cache for both source and target playlists
+                                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
+                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
+                                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
+                                    if playlist_id in PLAYLIST_CONTENT_CACHE:
+                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Clear")
+                                        del PLAYLIST_CONTENT_CACHE[playlist_id]
                                 else:
                                     print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Copy: {artist_name} - {track_name} [{year}]")
                                     sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
+
+
+                                    # Clear cache for target playlist only
+                                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
+                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
+                                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
                         else:
                             if move:
-                                if dry_run:
-                                    print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                # Check if source and target playlist are the same
+                                if playlist_id == playlists_by_year[playlist_key]:
+                                    # Track is already in the correct playlist, don't remove it
+                                    if dry_run:
+                                        print(f"[ {bcolors.OKCYAN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip (already in correct playlist): {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                    else:
+                                        print(f"[ {bcolors.OKCYAN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip (already in correct playlist): {artist_name} - {track_name} [{year}] -> {playlist_key}")
                                 else:
-                                    print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                    sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
+                                    # Track exists in target but source is different, remove from source
+                                    if dry_run:
+                                        print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                    else:
+                                        print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                        sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
+
+                                        # Clear cache for source playlist
+                                        if playlist_id in PLAYLIST_CONTENT_CACHE:
+                                            print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Clear")
+                                            del PLAYLIST_CONTENT_CACHE[playlist_id]
                             else:
                                 if dry_run:
                                     print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
@@ -227,12 +258,12 @@ def import_from_csv(csv_file, dry_run):
     """
     print("")
     print(f"=> Import from CSV file: {csv_file}")
-    
+
     # Get Spotify client
     sp = get_spotify_client()
     if not sp:
         return
-    
+
     # Read CSV file
     try:
         with open(csv_file, 'r', encoding='utf-8') as f:
@@ -244,26 +275,26 @@ def import_from_csv(csv_file, dry_run):
     except Exception as e:
         print(f"Error reading CSV file: {e}")
         sys.exit(1)
-    
+
     if not tracks_data:
         print("No tracks found in CSV file.")
         sys.exit(0)
-    
+
     # Group tracks by year to create playlists
     playlists_by_year = {}
-    
+
     for i, row in enumerate(tracks_data):
         artist_name = row.get('Artist', 'Unknown Artist')
         track_name = row.get('Track', 'Unknown Track')
         year = row.get('Year', 'unsortiert')
         track_uri = row.get('Spotify Uri', '')
-        
+
         if not track_uri:
             print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Skip: Missing Spotify URI for {artist_name} - {track_name}")
             continue
-        
+
         playlist_key = f"# Elektronisch - {year}"
-        
+
         # Check if playlist exists or create it
         if playlist_key not in playlists_by_year:
             if check_playlist_exists(sp, playlist_key):
@@ -276,7 +307,7 @@ def import_from_csv(csv_file, dry_run):
                     print(f"[ {bcolors.OKGREEN}Playlist{bcolors.ENDC} ] Create: {playlist_key}")
                     playlist = sp.user_playlist_create(user=username, name=playlist_key, public=False)
                     playlists_by_year[playlist_key] = playlist['id']
-        
+
         # Add track to playlist
         if playlists_by_year[playlist_key] is None:
             # Dry-run mode with non-existent playlist
@@ -288,6 +319,11 @@ def import_from_csv(csv_file, dry_run):
                 print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Add: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                 try:
                     sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
+
+                    # Clear cache for modified playlist
+                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
+                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
+                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
                 except Exception as e:
                     print(f"[ {bcolors.FAIL}Error{bcolors.ENDC}    ] Failed to add track: {e}")
         else:
@@ -295,7 +331,7 @@ def import_from_csv(csv_file, dry_run):
                 print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Would skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
             else:
                 print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-    
+
     print("")
     if dry_run:
         print("Import would have been completed successfully.")
@@ -323,13 +359,53 @@ def get_playlist_id_by_name(sp, playlist_name):
             return playlist['id']
     return None
 
-def is_track_in_playlist(sp, playlist_id, track_uri):
-    # Hole die Tracks der Playlist
-    playlist_tracks = sp.playlist_tracks(playlist_id)['items']
+def get_all_playlist_tracks(sp, playlist_id):
+    """
+    Retrieve all tracks from a playlist, handling pagination.
+    Uses caching to avoid repeated API calls.
+    Returns a list of track items.
+    """
+    # Check if data is in cache
+    if playlist_id in PLAYLIST_CONTENT_CACHE:
+        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Found")
+        return PLAYLIST_CONTENT_CACHE[playlist_id]
+    else:
+        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Created")
 
-    # Überprüfe, ob der Track in der Playlist existiert
+    all_tracks = []
+    offset = 0
+    limit = 100
+
+    while True:
+        # Call with current offset
+        response = sp.playlist_tracks(playlist_id, limit=limit, offset=offset)
+
+        # Extract tracks from current response
+        items = response['items']
+        all_tracks.extend(items)
+
+        # Check if we've reached the end
+        if len(items) < limit:
+            break
+
+        # Increase offset for next iteration
+        offset += limit
+
+    # Store in cache
+    PLAYLIST_CONTENT_CACHE[playlist_id] = all_tracks
+    return all_tracks
+
+def is_track_in_playlist(sp, playlist_id, track_uri):
+    """
+    Check if a track exists in a playlist.
+    Uses get_all_playlist_tracks which handles pagination and caching.
+    """
+    # Get all tracks from playlist (cached)
+    playlist_tracks = get_all_playlist_tracks(sp, playlist_id)
+
+    # Check if track exists in playlist
     for playlist_track in playlist_tracks:
-        if playlist_track['track']['uri'] == track_uri:
+        if playlist_track['track'] and playlist_track['track']['uri'] == track_uri:
             return True
 
     return False
