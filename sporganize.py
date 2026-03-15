@@ -20,6 +20,10 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+# Constants for Spotify authentication
+SPOTIFY_SCOPE = 'playlist-read-private playlist-modify-private playlist-modify-public'
+SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8080/callback'
+
 # Handling command line arguments
 parser = argparse.ArgumentParser(
     description="Utility for sorting spotify playlists by release year",
@@ -27,6 +31,7 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("playlist", nargs='?', default="", help="spotify playlist name for parse")
 parser.add_argument("-e", "--export", action="store_true", help="export track list into csv file")
+parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", help="import tracks from csv file to playlists")
 parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
 parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
 
@@ -42,6 +47,31 @@ client_secret = config['client_secret']
 username = config['username']
 playlists = config['playlists']
 
+def get_spotify_client():
+    """
+    Authenticate with Spotify and return a Spotify client instance.
+    Returns None if authentication fails.
+    """
+    try:
+        token = util.prompt_for_user_token(
+            username=username,
+            scope=SPOTIFY_SCOPE,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=SPOTIFY_REDIRECT_URI
+        )
+    except Exception as e:
+        print("")
+        print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
+        print("")
+        sys.exit(1)
+    
+    if token:
+        return spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
+    else:
+        print("Unable to obtain token for authentication.")
+        sys.exit(1)
+
 def sort_playlist_by_year(playlist_name, dry_run, move, export):
 
     if export:
@@ -52,29 +82,9 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
         print("")
         print(f"=> Spotify Playlist '{playlist_name}'")
 
-    # Authorization
-    scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
-    redirect_uri = 'http://127.0.0.1:8080/callback'
-
-    # Get the authorization URL
-    try:
-        token = util.prompt_for_user_token(
-            username=username,
-            scope=scope,
-            client_id=client_id,
-            client_secret=client_secret,
-            redirect_uri=redirect_uri
-        )
-    except Exception as e:
-        # Allgemeiner Fehlerhandler für alle anderen Fehler
-        print("")
-        print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
-        print("")
-        sys.exit(1)
-
-
-    if token:
-        sp = spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
+    # Get Spotify client
+    sp = get_spotify_client()
+    if sp:
 
         # Get all playlists
         playlists = []
@@ -209,8 +219,88 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
             print("Playlists would have been created and sorted successfully.")
         else:
             print("Playlists have been created and sorted successfully.")
+
+def import_from_csv(csv_file, dry_run):
+    """
+    Import tracks from a CSV file and add them to the corresponding playlists.
+    CSV format: Artist,Track,Year,Spotify Uri
+    """
+    print("")
+    print(f"=> Import from CSV file: {csv_file}")
+    
+    # Get Spotify client
+    sp = get_spotify_client()
+    if not sp:
+        return
+    
+    # Read CSV file
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            csv_reader = csv.DictReader(f)
+            tracks_data = list(csv_reader)
+    except FileNotFoundError:
+        print(f"Error: CSV file '{csv_file}' not found.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading CSV file: {e}")
+        sys.exit(1)
+    
+    if not tracks_data:
+        print("No tracks found in CSV file.")
+        sys.exit(0)
+    
+    # Group tracks by year to create playlists
+    playlists_by_year = {}
+    
+    for i, row in enumerate(tracks_data):
+        artist_name = row.get('Artist', 'Unknown Artist')
+        track_name = row.get('Track', 'Unknown Track')
+        year = row.get('Year', 'unsortiert')
+        track_uri = row.get('Spotify Uri', '')
+        
+        if not track_uri:
+            print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Skip: Missing Spotify URI for {artist_name} - {track_name}")
+            continue
+        
+        playlist_key = f"# Elektronisch - {year}"
+        
+        # Check if playlist exists or create it
+        if playlist_key not in playlists_by_year:
+            if check_playlist_exists(sp, playlist_key):
+                playlists_by_year[playlist_key] = get_playlist_id_by_name(sp, playlist_key)
+            else:
+                if dry_run:
+                    print(f"[ {bcolors.OKBLUE}Playlist{bcolors.ENDC} ] Would create: {playlist_key}")
+                    playlists_by_year[playlist_key] = None  # Placeholder for dry-run
+                else:
+                    print(f"[ {bcolors.OKGREEN}Playlist{bcolors.ENDC} ] Create: {playlist_key}")
+                    playlist = sp.user_playlist_create(user=username, name=playlist_key, public=False)
+                    playlists_by_year[playlist_key] = playlist['id']
+        
+        # Add track to playlist
+        if playlists_by_year[playlist_key] is None:
+            # Dry-run mode with non-existent playlist
+            print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Would add: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+        elif not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
+            if dry_run:
+                print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Would add: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+            else:
+                print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Add: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                try:
+                    sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
+                except Exception as e:
+                    print(f"[ {bcolors.FAIL}Error{bcolors.ENDC}    ] Failed to add track: {e}")
+        else:
+            if dry_run:
+                print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Would skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+            else:
+                print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+    
+    print("")
+    if dry_run:
+        print("Import would have been completed successfully.")
     else:
-        print("Unable to obtain token for authentication.")
+        print("Import completed successfully.")
 
 def slugify(text):
     text = unidecode.unidecode(text).lower()
@@ -247,14 +337,21 @@ def is_track_in_playlist(sp, playlist_id, track_uri):
 dry_run = args_config['dry_run']
 move = args_config['move']
 export = args_config['export']
+import_csv = args_config.get('import_csv')
 
 if move and export:
     print("Combine of move and export option not option not possible!")
     sys.exit(1)
-    
 
-if args_config['playlist']:
-    sort_playlist_by_year(args_config['playlist'], dry_run, export)
+if import_csv and (move or export):
+    print("Import option cannot be combined with move or export options!")
+    sys.exit(1)
+
+if import_csv:
+    # Import mode
+    import_from_csv(import_csv, dry_run)
+elif args_config['playlist']:
+    sort_playlist_by_year(args_config['playlist'], dry_run, move, export)
 else:
     for playlist in playlists:
         sort_playlist_by_year(playlist, dry_run, move, export)
