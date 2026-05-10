@@ -50,6 +50,26 @@ client_secret = config['client_secret']
 username = config['username']
 playlists = config['playlists']
 
+def print_info(message: str) -> None:
+    """Gibt eine Informationsmeldung aus."""
+    print(f"[ {bcolors.OKBLUE}Info{bcolors.ENDC} ] {message}")
+
+
+def print_error(message: str) -> None:
+    """Gibt eine Fehlermeldung mit Farbe aus."""
+    print(f"[ {bcolors.FAIL}Error{bcolors.ENDC} ] {message}")
+
+
+def print_success(message: str) -> None:
+    """Gibt eine Erfolgsmeldung aus."""
+    print(f"[ {bcolors.OKGREEN}Success{bcolors.ENDC} ] {message}")
+
+
+def print_warning(message: str) -> None:
+    """Gibt eine Warnmeldung aus."""
+    print(f"[ {bcolors.WARNING}Warning{bcolors.ENDC} ] {message}")
+
+
 def get_spotify_client():
     """
     Authenticate with Spotify and return a Spotify client instance.
@@ -64,25 +84,21 @@ def get_spotify_client():
             redirect_uri=SPOTIFY_REDIRECT_URI
         )
     except Exception as e:
-        print("")
-        print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
-        print("")
+        print_error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
         sys.exit(1)
 
     if token:
         return spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
     else:
-        print("Unable to obtain token for authentication.")
+        print_error("Unable to obtain token for authentication.")
         sys.exit(1)
 
-def sort_playlist_by_year(playlist_name, dry_run, move, export):
-
+def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export: bool) -> None:
+    """Sortiert Tracks einer Spotify-Playlist nach Veröffentlichungsjahr."""
     if export:
-        csvFilename = slugify(playlist_name).removeprefix('-').removesuffix('-') + '.csv';
-        print("")
+        csvFilename = slugify(playlist_name).removeprefix('-').removesuffix('-') + '.csv'
         print(f"=> Spotify Playlist '{playlist_name}' ({csvFilename})")
     else:
-        print("")
         print(f"=> Spotify Playlist '{playlist_name}'")
 
     # Get Spotify client
@@ -96,10 +112,7 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
             try:
                 results = sp.current_user_playlists(limit=50, offset=offset)
             except Exception as e:
-                # Allgemeiner Fehlerhandler für alle anderen Fehler
-                print("")
-                print(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
-                print("")
+                print_error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
                 sys.exit(1)
             playlists.extend(results['items'])
             offset += 50
@@ -114,7 +127,7 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
                 break
 
         if not playlist_id:
-            print("Playlist does not exist.")
+            print_error("Playlist does not exist.")
             return
 
         # Get the playlist tracks
@@ -128,9 +141,10 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
         #tracks.sort(key=lambda t: t['track']['album']['release_date'])
 
         if export:
-            csvFile = open(csvFilename, 'w')
-            csvExport = csv.writer(csvFile, dialect="excel")
-            csvExport.writerow(["Artist", "Track", "Year", "Spotify Uri"])
+            with open(csvFilename, 'w', encoding='utf-8') as csvFile:
+                csvFile = open(csvFilename, 'w', encoding='utf-8', newline='')
+                csvExport = csv.writer(csvFile, dialect="excel")
+                csvExport.writerow(["Artist", "Track", "Year", "Spotify Uri"])
 
         # Create playlists by year and genre
         playlists_by_year = {}
@@ -173,66 +187,38 @@ def sort_playlist_by_year(playlist_name, dry_run, move, export):
                     track_uri = track['track']['uri']
 
                     if export:
-                        if dry_run:
-                            print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would export to CSV: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                        else:
-                            print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Export to CSV: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                        action = "Would export to CSV" if dry_run else "Export to CSV"
+                        print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                        if not dry_run:
                             csvExport.writerow([artist_name, track_name, year, track_uri])
                     else:
-                        if playlist_create_would == False and not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
+                        if not playlist_create_would and not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
                             if dry_run:
-                                if move:
-                                    print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would move: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                else:
-                                    print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would copy: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                action = "Would move" if move else "Would copy"
+                                print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                             else:
+                                sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
                                 if move:
-                                    print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Move: {artist_name} - {track_name} [{year}]")
-                                    sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
                                     sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
-
-                                    # Clear cache for both source and target playlists
-                                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
-                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
-                                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
-                                    if playlist_id in PLAYLIST_CONTENT_CACHE:
-                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Clear")
-                                        del PLAYLIST_CONTENT_CACHE[playlist_id]
+                                    clear_playlist_cache(playlists_by_year[playlist_key])
+                                    clear_playlist_cache(playlist_id)
                                 else:
-                                    print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Copy: {artist_name} - {track_name} [{year}]")
-                                    sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
-
-
-                                    # Clear cache for target playlist only
-                                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
-                                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
-                                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
+                                    clear_playlist_cache(playlists_by_year[playlist_key])
+                                action = "Move" if move else "Copy"
+                                print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}]")
                         else:
                             if move:
-                                # Check if source and target playlist are the same
                                 if playlist_id == playlists_by_year[playlist_key]:
-                                    # Track is already in the correct playlist, don't remove it
-                                    if dry_run:
-                                        print(f"[ {bcolors.OKCYAN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip (already in correct playlist): {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                    else:
-                                        print(f"[ {bcolors.OKCYAN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip (already in correct playlist): {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                    action = "Would skip (already in correct playlist)" if dry_run else "Skip (already in correct playlist)"
+                                    print(f"[ {bcolors.OKCYAN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                                 else:
-                                    # Track exists in target but source is different, remove from source
-                                    if dry_run:
-                                        print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                    else:
-                                        print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip existing and remove from source: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                        sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
-
-                                        # Clear cache for source playlist
-                                        if playlist_id in PLAYLIST_CONTENT_CACHE:
-                                            print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Clear")
-                                            del PLAYLIST_CONTENT_CACHE[playlist_id]
+                                    action = "Would skip existing and remove from source" if dry_run else "Skip existing and remove from source"
+                                    print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                    sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
+                                    clear_playlist_cache(playlist_id)
                             else:
-                                if dry_run:
-                                    print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                                else:
-                                    print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip existing: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                action = "Would skip existing" if dry_run else "Skip existing"
+                                print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                 else:
                     if dry_run:
                         print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip missing: Track no longer available")
@@ -319,11 +305,7 @@ def import_from_csv(csv_file, dry_run):
                 print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Add: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                 try:
                     sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
-
-                    # Clear cache for modified playlist
-                    if playlists_by_year[playlist_key] in PLAYLIST_CONTENT_CACHE:
-                        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlists_by_year[playlist_key]} -> Clear")
-                        del PLAYLIST_CONTENT_CACHE[playlists_by_year[playlist_key]]
+                    clear_playlist_cache(playlists_by_year[playlist_key])
                 except Exception as e:
                     print(f"[ {bcolors.FAIL}Error{bcolors.ENDC}    ] Failed to add track: {e}")
         else:
@@ -394,6 +376,13 @@ def get_all_playlist_tracks(sp, playlist_id):
     # Store in cache
     PLAYLIST_CONTENT_CACHE[playlist_id] = all_tracks
     return all_tracks
+
+def clear_playlist_cache(playlist_id):
+    """Remove playlist contents from cache if present."""
+    if playlist_id in PLAYLIST_CONTENT_CACHE:
+        print(f"[ {bcolors.OKBLUE}Cache{bcolors.ENDC}    ] {playlist_id} -> Clear")
+        del PLAYLIST_CONTENT_CACHE[playlist_id]
+
 
 def is_track_in_playlist(sp, playlist_id, track_uri):
     """
