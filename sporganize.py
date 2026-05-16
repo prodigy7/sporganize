@@ -37,6 +37,7 @@ parser.add_argument("-e", "--export", action="store_true", help="export track li
 parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", help="import tracks from csv file to playlists")
 parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
 parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
+parser.add_argument("-u", "--urls", action="store_true", dest="urls", help="print full spotify URLs for playlists defined in config and exit")
 
 args = parser.parse_args()
 args_config = vars(args)
@@ -341,6 +342,20 @@ def get_playlist_id_by_name(sp, playlist_name):
             return playlist['id']
     return None
 
+
+def print_playlist_urls():
+    """Authenticate and print full Spotify playlist URLs for entries in `playlists` from config."""
+    sp = get_spotify_client()
+    if not sp:
+        return
+
+    for playlist in playlists:
+        playlist_id = get_playlist_id_by_name(sp, playlist)
+        if playlist_id:
+            print(f"https://open.spotify.com/playlist/{playlist_id}")
+        else:
+            print_error(f"Playlist not found: {playlist}")
+
 def get_all_playlist_tracks(sp, playlist_id):
     """
     Retrieve all tracks from a playlist, handling pagination.
@@ -403,6 +418,11 @@ dry_run = args_config['dry_run']
 move = args_config['move']
 export = args_config['export']
 import_csv = args_config.get('import_csv')
+urls_only = args_config.get('urls')
+
+if urls_only:
+    print_playlist_urls()
+    sys.exit(0)
 
 if move and export:
     print("Combine of move and export option not option not possible!")
