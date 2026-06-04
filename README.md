@@ -72,9 +72,11 @@ How authentication works in `sporganize`:
 1. Open the Spotify Developer Dashboard: https://developer.spotify.com/dashboard/applications
 2. Log in with your Spotify account and click **Create an App**.
 3. Give the app a name and description, then create it.
-4. In the app settings, choose **Edit Settings** and add the redirect URI used by this script, e.g. `http://127.0.0.1:8080/callback`, then save.
-5. Copy the **Client ID** and **Client Secret** from the app overview.
-6. Provide these values to `sporganize` via environment variables or `config.yaml`:
+4. Add the redirect URI used by this script, e.g. `http://127.0.0.1:8080/callback`.
+5. Make sure the app is configured for the Spotify Web API. This tool uses the Spotify Web API authorization code flow with the scopes `playlist-read-private`, `playlist-modify-private`, and `playlist-modify-public`.
+6. Click on save.
+7. Copy the **Client ID** and **Client Secret** from the app overview.
+8. Provide these values to `sporganize` via environment variables or `config.yaml`:
 
 ```yaml
 spotify_client_id: <your-client-id>
