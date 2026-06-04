@@ -12,6 +12,8 @@ pip install -r requirements.txt
 
 The script supports an optional Home Assistant webhook. If you add `webhook_url` to `config.yaml`, the script will send a JSON payload to that URL for every actual track move.
 
+When a track is actually added to a target playlist (copy or move), the target playlist name is also stored in `paylists.csv`. Duplicate playlist names are not written again.
+
 ### Home Assistant webhook setup
 
 1. Open Home Assistant and go to `Settings -> Automations & Scenes -> Automations`.
@@ -37,8 +39,8 @@ action:
         Track: {{ trigger.json.artist }} - {{ trigger.json.track }}
         Source: {{ trigger.json.from_playlist }}
         Target: {{ trigger.json.to_playlist }}
-        Action: {{ trigger.json.event }}
-        Execution: {% if trigger.json.dry_run %}Yes{% else %}No{% endif %}
+        Action: {% if trigger.json.event == "spotify_track_moved" %}Move{% else %}Copy{% endif %}
+        Execution: {% if trigger.json.dry_run %}No{% else %}Yes{% endif %}
       title: "Sporganize: {{ trigger.json.artist }} - {{ trigger.json.track }}"
       data:
         url: "{{ trigger.json.track_uri }}"

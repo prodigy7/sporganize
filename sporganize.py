@@ -5,6 +5,7 @@ import argparse
 import yaml
 import webbrowser
 import sys
+import os
 import csv
 import re
 import unidecode
@@ -25,6 +26,10 @@ class bcolors:
 
 # Cache for playlist contents to avoid repeated API calls
 PLAYLIST_CONTENT_CACHE = {}
+
+# File to store unique target playlists
+PLAYLIST_HISTORY_FILE = 'playlists.csv'
+PLAYLIST_HISTORY_CACHE = None
 
 # Constants for Spotify authentication
 SPOTIFY_SCOPE = 'playlist-read-private playlist-modify-private playlist-modify-public'
@@ -95,6 +100,48 @@ def send_webhook_notification(payload):
         print_warning(f"Webhook send error: {e}")
     except Exception as e:
         print_warning(f"Webhook unexpected error: {e}")
+
+
+def load_playlist_history():
+    """Load existing playlists from the history file into a set."""
+    global PLAYLIST_HISTORY_CACHE
+    if PLAYLIST_HISTORY_CACHE is not None:
+        return PLAYLIST_HISTORY_CACHE
+
+    PLAYLIST_HISTORY_CACHE = set()
+    if not os.path.exists(PLAYLIST_HISTORY_FILE):
+        return PLAYLIST_HISTORY_CACHE
+
+    try:
+        with open(PLAYLIST_HISTORY_FILE, 'r', encoding='utf-8', newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            for row in reader:
+                if row and row[0]:
+                    PLAYLIST_HISTORY_CACHE.add(row[0])
+    except Exception as e:
+        print_warning(f"Could not load playlist history: {e}")
+
+    return PLAYLIST_HISTORY_CACHE
+
+
+def add_playlist_to_history(playlist_name):
+    """Append a playlist name to paylists.csv if it is not already present."""
+    history = load_playlist_history()
+    if playlist_name in history:
+        return
+
+    try:
+        # Add to in-memory set
+        history.add(playlist_name)
+
+        # Write full sorted list back to the file to keep it alphabetical and deduplicated
+        sorted_playlists = sorted(history, key=lambda s: s.lower())
+        with open(PLAYLIST_HISTORY_FILE, 'w', encoding='utf-8', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            for name in sorted_playlists:
+                writer.writerow([name])
+    except Exception as e:
+        print_warning(f"Could not write playlist history: {e}")
 
 
 def get_spotify_client():
@@ -255,6 +302,7 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                                         'dry_run': False,
                                         'message': f"{artist_name} - {track_name} {'moved' if move else 'copied'} from {playlist_name} to {playlist_key}"
                                     })
+                                add_playlist_to_history(playlist_key)
                                 action = "Move" if move else "Copy"
                                 print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}]")
                         else:
