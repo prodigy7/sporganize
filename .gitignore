@@ -3,5 +3,5 @@
 config.yaml
 **/*.csv
 *.csv
+*.env
 __pycache__
-#*.env
