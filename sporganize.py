@@ -35,30 +35,6 @@ PLAYLIST_HISTORY_CACHE = None
 SPOTIFY_SCOPE = 'playlist-read-private playlist-modify-private playlist-modify-public'
 SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8080/callback'
 
-# Handling command line arguments
-parser = argparse.ArgumentParser(
-    description="Utility for sorting spotify playlists by release year",
-    formatter_class=argparse.ArgumentDefaultsHelpFormatter
-)
-parser.add_argument("playlist", nargs='?', default="", help="spotify playlist name for parse")
-parser.add_argument("-e", "--export", action="store_true", help="export track list into csv file")
-parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", help="import tracks from csv file to playlists")
-parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
-parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
-parser.add_argument("-u", "--urls", action="store_true", dest="urls", help="print full spotify URLs for playlists defined in config and exit")
-
-args = parser.parse_args()
-args_config = vars(args)
-
-# Read the configuration file
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-client_id = config['client_id']
-client_secret = config['client_secret']
-username = config['username']
-playlists = config['playlists']
-webhook_url = config.get('webhook_url')
 
 def print_info(message: str) -> None:
     """Gibt eine Informationsmeldung aus."""
@@ -78,6 +54,137 @@ def print_success(message: str) -> None:
 def print_warning(message: str) -> None:
     """Gibt eine Warnmeldung aus."""
     print(f"[ {bcolors.WARNING}Warning{bcolors.ENDC} ] {message}")
+
+# Handling command line arguments
+parser = argparse.ArgumentParser(
+    description="Utility for sorting spotify playlists by release year",
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+)
+parser.add_argument("playlist", nargs='?', default="", help="spotify playlist name for parse")
+parser.add_argument("-e", "--export", action="store_true", help="export track list into csv file")
+parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", help="import tracks from csv file to playlists")
+parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
+parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
+parser.add_argument("-u", "--urls", action="store_true", dest="urls", help="print full spotify URLs for playlists defined in config and exit")
+parser.add_argument("-c", "--config-path", dest="config_path", metavar="PATH", help="path to config file or directory containing config.yaml")
+parser.add_argument("--export-dir", dest="export_dir", metavar="DIR", help="directory to write exported CSV files into")
+args = parser.parse_args()
+args_config = vars(args)
+
+
+def resolve_config_path(config_path_option):
+    """Resolve the config file path from an explicit path, home config locations, or script directory."""
+    if config_path_option:
+        candidate = os.path.expanduser(config_path_option)
+        if os.path.isfile(candidate):
+            return candidate, True
+        if os.path.isdir(candidate):
+            return os.path.join(candidate, 'config.yaml'), False
+        if os.path.splitext(os.path.basename(candidate))[1].lower() in ('.yaml', '.yml'):
+            return candidate, False
+        return os.path.join(candidate, 'config.yaml'), False
+
+    home = os.path.expanduser('~')
+    candidates = [
+        os.path.join(home, '.config', 'sporganize', 'config.yaml'),
+        os.path.join(home, '.config', 'config.yaml'),
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config.yaml'),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path, True
+
+    return candidates[-1], False
+
+
+config_path_option = args.config_path or os.environ.get('CONFIG_PATH')
+config_path, config_found = resolve_config_path(config_path_option)
+config = {}
+if config_path:
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+        if config_found:
+            print_info(f"Loaded configuration from {config_path}")
+    except FileNotFoundError:
+        if config_path_option:
+            print_error(f"Config file not found at {config_path}")
+            sys.exit(1)
+        config = {}
+    except yaml.YAMLError as e:
+        print_error(f"Failed to parse {config_path}: {e}")
+        sys.exit(1)
+
+client_id = os.environ.get('SPOTIFY_CLIENT_ID') or config.get('spotify_client_id')
+client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET') or config.get('spotify_client_secret')
+username = os.environ.get('SPOTIFY_USERNAME') or config.get('spotify_username')
+webhook_url = os.environ.get('WEBHOOK_URL') or config.get('webhook_url')
+
+playlist_env = os.environ.get('PLAYLISTS') or os.environ.get('SPOTIFY_PLAYLISTS')
+if playlist_env:
+    playlists = [item.strip() for item in playlist_env.split(',') if item.strip()]
+else:
+    config_playlists = config.get('spotify_playlists')
+    if isinstance(config_playlists, str):
+        playlists = [item.strip() for item in config_playlists.split(',') if item.strip()]
+    else:
+        playlists = config_playlists or []
+
+export_dir = args_config.get('export_dir') or os.environ.get('EXPORT_DIR')
+if export_dir:
+    export_dir = os.path.abspath(os.path.expanduser(export_dir))
+else:
+    export_dir = None
+
+
+def prepare_export_directory(export_dir, dry_run):
+    """Ensure the export directory exists and is writable."""
+    if not export_dir:
+        return None
+
+    if os.path.exists(export_dir):
+        if not os.path.isdir(export_dir):
+            print_error(f"Export path exists and is not a directory: {export_dir}")
+            sys.exit(1)
+        if not os.access(export_dir, os.W_OK):
+            print_error(f"Export directory is not writable: {export_dir}")
+            sys.exit(1)
+        return export_dir
+
+    if dry_run:
+        print_info(f"Dry run: would create export directory: {export_dir}")
+        return export_dir
+
+    try:
+        os.makedirs(export_dir, exist_ok=True)
+    except OSError as e:
+        print_error(f"Could not create export directory '{export_dir}': {e}")
+        sys.exit(1)
+
+    if not os.access(export_dir, os.W_OK):
+        print_error(f"Export directory is not writable after creation: {export_dir}")
+        sys.exit(1)
+
+    return export_dir
+
+def validate_configuration():
+    missing = []
+    if not client_id:
+        missing.append('SPOTIFY_CLIENT_ID / spotify_client_id')
+    if not client_secret:
+        missing.append('SPOTIFY_CLIENT_SECRET / spotify_client_secret')
+    if not username:
+        missing.append('SPOTIFY_USERNAME / spotify_username')
+    if not playlists and not args_config.get('playlist') and not args_config.get('import_csv') and not args_config.get('urls'):
+        missing.append('PLAYLISTS / SPOTIFY_PLAYLISTS / spotify_playlists (required when no playlist positional argument is provided)')
+
+    if missing:
+        print_error('Missing required configuration values:')
+        for key in missing:
+            print_error(f'  - {key}')
+        sys.exit(1)
+
+validate_configuration()
 
 
 def send_webhook_notification(payload):
@@ -167,10 +274,15 @@ def get_spotify_client():
         print_error("Unable to obtain token for authentication.")
         sys.exit(1)
 
-def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export: bool) -> None:
+def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export: bool, export_dir=None) -> None:
     """Sortiert Tracks einer Spotify-Playlist nach Veröffentlichungsjahr."""
+    csvFilename = None
     if export:
+        if export_dir:
+            export_dir = prepare_export_directory(export_dir, dry_run)
         csvFilename = slugify(playlist_name).removeprefix('-').removesuffix('-') + '.csv'
+        if export_dir:
+            csvFilename = os.path.join(export_dir, csvFilename)
         print(f"=> Spotify Playlist '{playlist_name}' ({csvFilename})")
     else:
         print(f"=> Spotify Playlist '{playlist_name}'")
@@ -214,56 +326,61 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
         # Sort the tracks by year
         #tracks.sort(key=lambda t: t['track']['album']['release_date'])
 
-        if export:
-            with open(csvFilename, 'w', encoding='utf-8') as csvFile:
+        csvFile = None
+        csvExport = None
+        if export and not dry_run:
+            try:
                 csvFile = open(csvFilename, 'w', encoding='utf-8', newline='')
                 csvExport = csv.writer(csvFile, dialect="excel")
                 csvExport.writerow(["Artist", "Track", "Year", "Spotify Uri"])
+            except OSError as e:
+                print_error(f"Could not open export file '{csvFilename}': {e}")
+                return
 
         # Create playlists by year and genre
         playlists_by_year = {}
-        for i, track in enumerate(tracks):
-            track_type = track["track"]["type"]
-            if track_type == "track":
-                # Fetch extra info made currently no sense
-                # track_info = sp.track(track['track']['id'])
-                track_info = track['track']
-                year = track_info['album']['release_date'][:4]
+        try:
+            for i, track in enumerate(tracks):
+                track_type = track["track"]["type"]
+                if track_type == "track":
+                    # Fetch extra info made currently no sense
+                    # track_info = sp.track(track['track']['id'])
+                    track_info = track['track']
+                    year = track_info['album']['release_date'][:4]
 
-                # Print progress information
-                artist_name = track_info['artists'][0]['name'] if track_info['artists'][0] else 'Unknown Artist'
-                track_name = track_info['name']
+                    # Print progress information
+                    artist_name = track_info['artists'][0]['name'] if track_info['artists'][0] else 'Unknown Artist'
+                    track_name = track_info['name']
 
-                process_possible = True
-                if not track_name:
-                    process_possible = False
+                    process_possible = True
+                    if not track_name:
+                        process_possible = False
 
-                #genres = get_artist_genre(sp, track_info['artists'][0]['id']) if track_info['artists'] else 'Other'
+                    #genres = get_artist_genre(sp, track_info['artists'][0]['id']) if track_info['artists'] else 'Other'
 
-                playlist_key = f"# Elektronisch - {year}"
+                    playlist_key = f"# Elektronisch - {year}"
 
-                if process_possible:
-                    if playlist_key not in playlists_by_year:
-                        # Check if the playlist already exists
-                        playlist_create_would = False
-                        if check_playlist_exists(sp, playlist_key):
-                            playlists_by_year[playlist_key] = get_playlist_id_by_name(sp, playlist_key)
-                        else:
-                            if not export:
-                                if dry_run:
-                                    print(f"[ {bcolors.OKBLUE}Playlist{bcolors.ENDC} ] Would create: {playlist_key}")
-                                    playlist_create_would = True
-                                else:
-                                    print(f"[ {bcolors.OKGREEN}Playlist{bcolors.ENDC} ] Create: {playlist_key}")
-                                    playlist = sp.user_playlist_create(user=username, name=playlist_key, public=False)
-                                    playlists_by_year[playlist_key] = playlist['id']
+                    playlist_create_would = False
+                    if process_possible:
+                        if playlist_key not in playlists_by_year:
+                            if check_playlist_exists(sp, playlist_key):
+                                playlists_by_year[playlist_key] = get_playlist_id_by_name(sp, playlist_key)
+                            else:
+                                if not export:
+                                    if dry_run:
+                                        print(f"[ {bcolors.OKBLUE}Playlist{bcolors.ENDC} ] Would create: {playlist_key}")
+                                        playlist_create_would = True
+                                    else:
+                                        print(f"[ {bcolors.OKGREEN}Playlist{bcolors.ENDC} ] Create: {playlist_key}")
+                                        playlist = sp.user_playlist_create(user=username, name=playlist_key, public=False)
+                                        playlists_by_year[playlist_key] = playlist['id']
 
                     track_uri = track['track']['uri']
 
                     if export:
                         action = "Would export to CSV" if dry_run else "Export to CSV"
                         print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                        if not dry_run:
+                        if not dry_run and csvExport is not None:
                             csvExport.writerow([artist_name, track_name, year, track_uri])
                     else:
                         if not playlist_create_would and not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
@@ -318,23 +435,25 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                             else:
                                 action = "Would skip existing" if dry_run else "Skip existing"
                                 print(f"[ {bcolors.WARNING}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
-                else:
+                elif track_type is None or track_type == 'episode':
                     if dry_run:
-                        print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip missing: Track no longer available")
+                        print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Would skip missing or unsupported item: {track_uri if 'track_uri' in locals() else 'unknown'}")
                     else:
-                        print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip missing: Track no longer available")
-
-
-            else:
-                artist_name = track["track"]['album']['artists'][0]['name'] if track["track"]['album']['artists'] else 'Unknown Artist'
-                track_name = track["track"]["name"]
-                print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Type {track_type} not supported yet: {artist_name} - {track_name}")
+                        print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip missing or unsupported item")
+                else:
+                    artist_name = track["track"]['album']['artists'][0]['name'] if track["track"]['album']['artists'] else 'Unknown Artist'
+                    track_name = track["track"]["name"]
+                    print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Type {track_type} not supported yet: {artist_name} - {track_name}")
+        finally:
+            if csvFile is not None:
+                csvFile.close()
 
         print("")
         if dry_run:
             print("Playlists would have been created and sorted successfully.")
         else:
             print("Playlists have been created and sorted successfully.")
+
 
 def import_from_csv(csv_file, dry_run):
     """
@@ -534,9 +653,9 @@ if import_csv:
     # Import mode
     import_from_csv(import_csv, dry_run)
 elif args_config['playlist']:
-    sort_playlist_by_year(args_config['playlist'], dry_run, move, export)
+    sort_playlist_by_year(args_config['playlist'], dry_run, move, export, export_dir)
 else:
     for playlist in playlists:
-        sort_playlist_by_year(playlist, dry_run, move, export)
+        sort_playlist_by_year(playlist, dry_run, move, export, export_dir)
 
 print("")

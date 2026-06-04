@@ -1,0 +1,13 @@
+services:
+  sporganize:
+    image: youruser/sporganize:latest
+    build:
+      context: .
+      dockerfile: .build/Dockerfile
+    entrypoint: ["/app/entrypoint.sh"]
+    restart: unless-stopped
+    env_file: "docker-compose.env"
+    command: ["--dry-run", "--move"]
+    volumes:
+      - ./playlists.csv:/app/playlists.csv
+      - ./.cache-prodigy7k:/app/.cache-prodigy7k

@@ -1,5 +1,6 @@
 .venv
 .cache-*
 config.yaml
+**/*.csv
 *.csv
 __pycache__
