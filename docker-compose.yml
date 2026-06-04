@@ -10,4 +10,6 @@ services:
     command: ["--dry-run", "--move"]
     volumes:
       - ./playlists.csv:/app/playlists.csv
-      - ./.cache-prodigy7k:/app/.cache-prodigy7k
+      - ./.cache:/app/.cache
+      #- ./.cache-prodigy7k:/app/.cache-prodigy7k
+      - /etc/localtime:/etc/localtime:ro

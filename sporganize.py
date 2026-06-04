@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 import spotipy
-import spotipy.util as util
+from spotipy.oauth2 import SpotifyOAuth
 import argparse
 import yaml
-import webbrowser
 import sys
 import os
 import csv
@@ -66,7 +65,9 @@ parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", hel
 parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
 parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
 parser.add_argument("-u", "--urls", action="store_true", dest="urls", help="print full spotify URLs for playlists defined in config and exit")
+parser.add_argument("--auth-only", action="store_true", dest="auth_only", help="only perform Spotify authentication and exit")
 parser.add_argument("-c", "--config-path", dest="config_path", metavar="PATH", help="path to config file or directory containing config.yaml")
+parser.add_argument("--cache-path", dest="cache_path", metavar="PATH", help="path or directory to store Spotify token cache")
 parser.add_argument("--export-dir", dest="export_dir", metavar="DIR", help="directory to write exported CSV files into")
 args = parser.parse_args()
 args_config = vars(args)
@@ -136,6 +137,48 @@ if export_dir:
 else:
     export_dir = None
 
+spotify_cache_path = args_config.get('cache_path') or os.environ.get('SPOTIFY_CACHE_PATH') or config.get('spotify_cache_path')
+if spotify_cache_path:
+    spotify_cache_path = os.path.abspath(os.path.expanduser(spotify_cache_path))
+else:
+    spotify_cache_path = None
+
+
+def resolve_spotify_cache_path(cache_path_option, username):
+    """Resolve the Spotify token cache file path.
+
+    The default is ~/.cache/.cache-<username> or ~/.cache/.cache.
+    If a directory is given, the default cache filename is used inside it.
+    """
+    default_file = f".cache-{username}" if username else ".cache"
+    if cache_path_option:
+        candidate = os.path.expanduser(cache_path_option)
+        if candidate.endswith(os.sep) or os.path.isdir(candidate):
+            cache_dir = candidate
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+            except OSError as e:
+                print_error(f"Could not create cache directory '{cache_dir}': {e}")
+                sys.exit(1)
+            return os.path.join(cache_dir, default_file)
+
+        cache_dir = os.path.dirname(candidate) or os.getcwd()
+        if cache_dir and not os.path.exists(cache_dir):
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+            except OSError as e:
+                print_error(f"Could not create cache directory '{cache_dir}': {e}")
+                sys.exit(1)
+        return candidate
+
+    home_cache_dir = os.path.join(os.path.expanduser('~'), '.cache')
+    try:
+        os.makedirs(home_cache_dir, exist_ok=True)
+    except OSError as e:
+        print_error(f"Could not create home cache directory '{home_cache_dir}': {e}")
+        sys.exit(1)
+    return os.path.join(home_cache_dir, default_file)
+
 
 def prepare_export_directory(export_dir, dry_run):
     """Ensure the export directory exists and is writable."""
@@ -175,7 +218,8 @@ def validate_configuration():
         missing.append('SPOTIFY_CLIENT_SECRET / spotify_client_secret')
     if not username:
         missing.append('SPOTIFY_USERNAME / spotify_username')
-    if not playlists and not args_config.get('playlist') and not args_config.get('import_csv') and not args_config.get('urls'):
+    # If auth-only flag is set, we don't require playlists/import/urls to be present
+    if not playlists and not args_config.get('playlist') and not args_config.get('import_csv') and not args_config.get('urls') and not args_config.get('auth_only'):
         missing.append('PLAYLISTS / SPOTIFY_PLAYLISTS / spotify_playlists (required when no playlist positional argument is provided)')
 
     if missing:
@@ -257,21 +301,62 @@ def get_spotify_client():
     Returns None if authentication fails.
     """
     try:
-        token = util.prompt_for_user_token(
-            username=username,
-            scope=SPOTIFY_SCOPE,
+        cache_path = resolve_spotify_cache_path(spotify_cache_path, username)
+        oauth = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
-            redirect_uri=SPOTIFY_REDIRECT_URI
+            redirect_uri=SPOTIFY_REDIRECT_URI,
+            scope=SPOTIFY_SCOPE,
+            cache_path=cache_path,
+            open_browser=False
         )
+
+        token_info = oauth.get_cached_token()
+        if token_info:
+            token = token_info.get('access_token')
+        else:
+            print_info("No cached Spotify token found.")
+            auth_url = oauth.get_authorize_url()
+            print("");
+            print("Authorize the application by visiting this URL:")
+            print(auth_url)
+            if sys.stdin.isatty():
+                print("");
+                redirect_response = input("After authorization, paste the full redirect URL or code here: ").strip()
+                print("");
+            else:
+                print_error("Interactive input is not available. Run the script in an interactive shell to complete authentication:")
+                print_error("docker compose run --rm sporganize --auth-only")
+                sys.exit(1)
+
+            code = oauth.parse_response_code(redirect_response)
+            if not code:
+                code = redirect_response
+
+            try:
+                oauth.as_dict = False
+                token_info = oauth.get_access_token(code)
+            except Exception as e:
+                print_error(f"Failed to obtain access token: {e}")
+                sys.exit(1)
+
+            if not token_info:
+                print_error("Unable to obtain token for authentication.")
+                sys.exit(1)
+
+            if isinstance(token_info, dict):
+                token = token_info.get('access_token')
+            else:
+                token = token_info
+
+            if not token:
+                print_error("Unable to obtain token for authentication.")
+                sys.exit(1)
+
+            print("");
+        return spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
     except Exception as e:
         print_error(f"Ein unerwarteter Fehler ist aufgetreten: {e}")
-        sys.exit(1)
-
-    if token:
-        return spotipy.Spotify(auth=token, requests_timeout=10, retries=5)
-    else:
-        print_error("Unable to obtain token for authentication.")
         sys.exit(1)
 
 def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export: bool, export_dir=None) -> None:
@@ -636,10 +721,21 @@ move = args_config['move']
 export = args_config['export']
 import_csv = args_config.get('import_csv')
 urls_only = args_config.get('urls')
+auth_only = args_config.get('auth_only')
 
 if urls_only:
     print_playlist_urls()
     sys.exit(0)
+
+if auth_only:
+    # Perform authentication flow and exit
+    sp = get_spotify_client()
+    if sp:
+        print_success("Authentication successful.")
+        sys.exit(0)
+    else:
+        print_error("Authentication failed.")
+        sys.exit(1)
 
 if move and export:
     print("Combine of move and export option not option not possible!")
