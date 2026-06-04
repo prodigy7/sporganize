@@ -1,5 +1,8 @@
 client_id: "<spotify client id>"
 client_secret: "<spotify client secret>"
 username: "<spotify username>"
+# Optional Home Assistant webhook URL for track move notifications.
+# Example: https://your-home-assistant.local/api/webhook/spotify_track_moved
+webhook_url: "<optional home assistant webhook URL>"
 playlists:
   - "<playlist name>"

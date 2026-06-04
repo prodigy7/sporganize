@@ -8,6 +8,9 @@ import sys
 import csv
 import re
 import unidecode
+import json
+import urllib.request
+import urllib.error
 
 class bcolors:
     HEADER = '\033[95m'
@@ -50,6 +53,7 @@ client_id = config['client_id']
 client_secret = config['client_secret']
 username = config['username']
 playlists = config['playlists']
+webhook_url = config.get('webhook_url')
 
 def print_info(message: str) -> None:
     """Gibt eine Informationsmeldung aus."""
@@ -69,6 +73,28 @@ def print_success(message: str) -> None:
 def print_warning(message: str) -> None:
     """Gibt eine Warnmeldung aus."""
     print(f"[ {bcolors.WARNING}Warning{bcolors.ENDC} ] {message}")
+
+
+def send_webhook_notification(payload):
+    """Sendet ein JSON-Payload an den optional konfigurierten Webhook."""
+    if not webhook_url:
+        return
+
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        request = urllib.request.Request(
+            webhook_url,
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if response.status >= 300:
+                print_warning(f"Webhook send failed: {response.status} {response.reason}")
+    except urllib.error.URLError as e:
+        print_warning(f"Webhook send error: {e}")
+    except Exception as e:
+        print_warning(f"Webhook unexpected error: {e}")
 
 
 def get_spotify_client():
@@ -194,17 +220,41 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                             csvExport.writerow([artist_name, track_name, year, track_uri])
                     else:
                         if not playlist_create_would and not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
+                            event_name = "spotify_track_moved" if move else "spotify_track_copied"
+                            action_label = "Would move" if dry_run and move else "Would copy" if dry_run else "Move" if move else "Copy"
+
                             if dry_run:
-                                action = "Would move" if move else "Would copy"
-                                print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                print(f"[ {bcolors.OKBLUE}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action_label}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
+                                if webhook_url:
+                                    send_webhook_notification({
+                                        'event': event_name,
+                                        'track': track_name,
+                                        'artist': artist_name,
+                                        'year': year,
+                                        'from_playlist': playlist_name,
+                                        'to_playlist': playlist_key,
+                                        'track_uri': track_uri,
+                                        'dry_run': True,
+                                        'message': f"{artist_name} - {track_name} would {'move' if move else 'copy'} from {playlist_name} to {playlist_key}"
+                                    })
                             else:
                                 sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
                                 if move:
                                     sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_uri])
-                                    clear_playlist_cache(playlists_by_year[playlist_key])
-                                    clear_playlist_cache(playlist_id)
-                                else:
-                                    clear_playlist_cache(playlists_by_year[playlist_key])
+                                clear_playlist_cache(playlists_by_year[playlist_key])
+                                clear_playlist_cache(playlist_id)
+                                if webhook_url:
+                                    send_webhook_notification({
+                                        'event': event_name,
+                                        'track': track_name,
+                                        'artist': artist_name,
+                                        'year': year,
+                                        'from_playlist': playlist_name,
+                                        'to_playlist': playlist_key,
+                                        'track_uri': track_uri,
+                                        'dry_run': False,
+                                        'message': f"{artist_name} - {track_name} {'moved' if move else 'copied'} from {playlist_name} to {playlist_key}"
+                                    })
                                 action = "Move" if move else "Copy"
                                 print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}]")
                         else:

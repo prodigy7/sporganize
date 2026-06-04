@@ -10,6 +10,42 @@ Use the package manager [pip](https://pip.pypa.io/en/stable/) to install all req
 pip install -r requirements.txt
 ```
 
+The script supports an optional Home Assistant webhook. If you add `webhook_url` to `config.yaml`, the script will send a JSON payload to that URL for every actual track move.
+
+### Home Assistant webhook setup
+
+1. Open Home Assistant and go to `Settings -> Automations & Scenes -> Automations`.
+2. Create a new automation and choose `Webhook` as the trigger type.
+3. Set a webhook ID, for example `spotify_track_moved`.
+4. Use the full webhook URL in `config.yaml` like `https://<your-home-assistant>/api/webhook/spotify_track_moved`.
+5. Add an action for the automation, for example a notification or a logbook entry.
+
+The payload that is posted is a JSON object with fields such as `event`, `track`, `artist`, `year`, `from_playlist`, `to_playlist`, `track_uri`, `dry_run`, and `message`.
+
+#### Example Home Assistant automation
+
+```yaml
+alias: Spotify track moved notification
+trigger:
+  - platform: webhook
+    webhook_id: spotify_track_moved
+condition: []
+action:
+  - service: notify.mobile_app_your_phone
+    data:
+      message: |-
+        Track: {{ trigger.json.artist }} - {{ trigger.json.track }}
+        Source: {{ trigger.json.from_playlist }}
+        Target: {{ trigger.json.to_playlist }}
+        Action: {{ trigger.json.event }}
+        Execution: {% if trigger.json.dry_run %}Yes{% else %}No{% endif %}
+      title: "Sporganize: {{ trigger.json.artist }} - {{ trigger.json.track }}"
+      data:
+        url: "{{ trigger.json.track_uri }}"
+```
+
+In the action, Home Assistant makes the webhook body available via `trigger.json`, so you can use the fields directly in notifications or other automations.
+
 ## Setup
 
 Execute the following commands to set up:
