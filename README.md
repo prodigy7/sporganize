@@ -11,7 +11,10 @@ sporganize connects to the Spotify Web API, reads configured source playlists an
 - Sort tracks from one or more source playlists into year-based playlists
 - Copy or move tracks (`--move`)
 - Export track lists to CSV (`--export`, `--export-dir`)
+- Import track lists from CSV back into playlists (`--import-csv`)
+- Print full Spotify playlist URLs for configured playlists (`--urls`)
 - Webhook notifications for moved/copied tracks (`WEBHOOK_URL`)
+- Optional external hook script called for each moved/copied track (`--hook-script` / `TRACK_HOOK_SCRIPT`)
 - Container-friendly auth flow and token cache handling
 
 ## Requirements
@@ -34,11 +37,11 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Configuration values are read from environment variables first, then from `config.yaml` if present. You can explicitly point to a config file or directory with `--config-path` or `CONFIG_PATH`.
+Configuration values are read from environment variables first, then from `config.yaml` if present. You can explicitly point to a config file or directory with `-c`/`--config-path` or `CONFIG_PATH`.
 
 Configuration search order (first existing wins):
 
-1. `--config-path <path>` / `CONFIG_PATH` (file or directory containing `config.yaml`)
+1. `-c`, `--config-path <path>` / `CONFIG_PATH` (file or directory containing `config.yaml`)
 2. `$HOME/.config/sporganize/config.yaml`
 3. `$HOME/.config/config.yaml`
 4. `config.yaml` next to the script
@@ -50,7 +53,8 @@ Important configuration keys (env vars or `config.yaml`):
 - `SPOTIFY_USERNAME`
 - `PLAYLISTS` or `SPOTIFY_PLAYLISTS` (comma-separated)
 - `WEBHOOK_URL`
-- `SPOTIFY_CACHE_PATH` or `spotify_cache_path` (optional path or directory to persist the OAuth token cache)
+- `SPOTIFY_CACHE_PATH` (optional path or directory to persist the OAuth token cache)
+- `TRACK_HOOK_SCRIPT` (optional path to an executable hook script)
 
 If no `SPOTIFY_CACHE_PATH` is set, the default token cache file will be placed in `~/.cache/.cache-<username>` (or `~/.cache/.cache` if no username).
 
@@ -72,7 +76,7 @@ How authentication works in `sporganize`:
 1. Open the Spotify Developer Dashboard: https://developer.spotify.com/dashboard/applications
 2. Log in with your Spotify account and click **Create an App**.
 3. Give the app a name and description, then create it.
-4. Add the redirect URI used by this script, e.g. `http://127.0.0.1:8080/callback`.
+4. Add the redirect URI used by this script, e.g. `https://127.0.0.1:8080/callback`.
 5. Make sure the app is configured for the Spotify Web API. This tool uses the Spotify Web API authorization code flow with the scopes `playlist-read-private`, `playlist-modify-private`, and `playlist-modify-public`.
 6. Click on save.
 7. Copy the **Client ID** and **Client Secret** from the app overview.
@@ -105,6 +109,7 @@ docker run --rm -it \
 ```
 
 - `--auth-only` runs the authentication flow and exits after storing the token (useful to pre-authenticate an interactive container).
+- `--reauth` deletes the cached token first, forcing a fresh authentication (useful if the token was revoked or scopes changed). Combine with `--auth-only` to just re-authenticate: `sporganize --reauth --auth-only`.
 - If running non-interactively (no TTY) the script cannot prompt for the redirect URL; run an interactive container to complete the flow.
 
 Security note:
@@ -121,12 +126,19 @@ python3 sporganize.py [playlist] [options]
 
 Common options:
 
-- `--dry-run` : simulate changes without modifying playlists
-- `--move` : move tracks instead of copying
-- `--export` : export track list to CSV
+- `-n`, `--dry-run` : simulate changes without modifying playlists
+- `-m`, `--move` : move tracks instead of copying
+- `-e`, `--export` : export track list to CSV
 - `--export-dir DIR` : directory for CSV exports
+- `-i`, `--import-csv FILE` : import tracks from a CSV file into playlists
+- `-u`, `--urls` : print full Spotify playlist URLs for playlists defined in config and exit
 - `--auth-only` : perform OAuth authentication and exit
+- `--reauth` : forget the cached Spotify token and force a new authentication
+- `-c`, `--config-path PATH` / `CONFIG_PATH` : path to config file or directory
 - `--cache-path PATH` / `SPOTIFY_CACHE_PATH` : token cache path
+- `--hook-script PATH` / `TRACK_HOOK_SCRIPT` : script called for each moved/copied track (see [Hook script](#hook-script))
+
+`--move` and `--export` are mutually exclusive, and `--import-csv` cannot be combined with either.
 
 For full options:
 
@@ -150,10 +162,11 @@ docker compose run --rm -it sporganize --auth-only
 
 The container's entrypoint will by default run `sporganize.py` periodically. To run a single pass set `INTERVAL_SECONDS=0` or `RUN_ONCE=1` in the environment. Passing `--auth-only` causes the entrypoint to run once and exit after authentication.
 
-## Export & History
+## Export & Import (CSV)
 
 - Exported CSVs will be written to the directory given with `--export-dir` or `EXPORT_DIR` and will be created if missing.
-- Created target playlist names are recorded in `paylists.csv` (to keep a list of generated playlists); duplicates are avoided.
+- Created target playlist names are recorded in `playlists.csv` (to keep a list of generated playlists); duplicates are avoided.
+- Both export and `--import-csv` use the same CSV column format: `Artist,Track,Year,Spotify Uri`. This lets you edit an exported file (e.g. fix years or drop rows) and re-import it with `--import-csv`.
 
 ## Webhook (Home Assistant example)
 
@@ -177,6 +190,37 @@ action:
         Dry run: {{ trigger.json.dry_run }}
       data:
         url: "{{ trigger.json.track_uri }}"
+```
+
+## Hook script
+
+If `--hook-script` / `TRACK_HOOK_SCRIPT` (or `track_hook_script` in `config.yaml`) is configured, the given executable is called for every track that is actually moved or copied into a year playlist:
+
+```bash
+<hook-script> "<source playlist name>" "<spotify track url>"
+```
+
+- The first argument is the name of the source playlist the track came from.
+- The second argument is the track's Spotify URL, e.g. `https://open.spotify.com/track/<id>`.
+- The script is only invoked on real changes. In `--dry-run` mode, a line is printed showing what would be called instead of actually running it.
+- The script must be executable (`chmod +x`) and is run with a 30 second timeout; failures or timeouts are logged as warnings and do not stop the run.
+
+Example hook script (`hooks/notify.sh`):
+
+```bash
+#!/usr/bin/env bash
+playlist_name="$1"
+track_url="$2"
+echo "Track from '$playlist_name' -> $track_url"
+```
+
+When running in the container, the hook script must exist inside the container filesystem: mount it via a volume and point `TRACK_HOOK_SCRIPT` at the in-container path, e.g.:
+
+```yaml
+volumes:
+  - ./hooks/notify.sh:/app/hooks/notify.sh:ro
+environment:
+  TRACK_HOOK_SCRIPT: /app/hooks/notify.sh
 ```
 
 ## Contributing

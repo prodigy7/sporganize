@@ -11,6 +11,7 @@ import unidecode
 import json
 import urllib.request
 import urllib.error
+import subprocess
 
 class bcolors:
     HEADER = '\033[95m'
@@ -32,7 +33,7 @@ PLAYLIST_HISTORY_CACHE = None
 
 # Constants for Spotify authentication
 SPOTIFY_SCOPE = 'playlist-read-private playlist-modify-private playlist-modify-public'
-SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:8080/callback'
+SPOTIFY_REDIRECT_URI = 'https://127.0.0.1:8080/callback'
 
 
 def print_info(message: str) -> None:
@@ -66,9 +67,11 @@ parser.add_argument("-n", "--dry-run", action="store_true", help="dry run withou
 parser.add_argument("-m", "--move", action="store_true", help="would move track from source to target playlist instead of copying")
 parser.add_argument("-u", "--urls", action="store_true", dest="urls", help="print full spotify URLs for playlists defined in config and exit")
 parser.add_argument("--auth-only", action="store_true", dest="auth_only", help="only perform Spotify authentication and exit")
+parser.add_argument("--reauth", action="store_true", dest="reauth", help="forget the cached Spotify token and force a new authentication")
 parser.add_argument("-c", "--config-path", dest="config_path", metavar="PATH", help="path to config file or directory containing config.yaml")
 parser.add_argument("--cache-path", dest="cache_path", metavar="PATH", help="path or directory to store Spotify token cache")
 parser.add_argument("--export-dir", dest="export_dir", metavar="DIR", help="directory to write exported CSV files into")
+parser.add_argument("--hook-script", dest="hook_script", metavar="PATH", help="path to an executable script called for each track that is moved or copied, with the playlist name and track URL as arguments")
 args = parser.parse_args()
 args_config = vars(args)
 
@@ -120,6 +123,10 @@ client_id = os.environ.get('SPOTIFY_CLIENT_ID') or config.get('spotify_client_id
 client_secret = os.environ.get('SPOTIFY_CLIENT_SECRET') or config.get('spotify_client_secret')
 username = os.environ.get('SPOTIFY_USERNAME') or config.get('spotify_username')
 webhook_url = os.environ.get('WEBHOOK_URL') or config.get('webhook_url')
+
+hook_script = args_config.get('hook_script') or os.environ.get('TRACK_HOOK_SCRIPT') or config.get('track_hook_script')
+if hook_script:
+    hook_script = os.path.abspath(os.path.expanduser(hook_script))
 
 playlist_env = os.environ.get('PLAYLISTS') or os.environ.get('SPOTIFY_PLAYLISTS')
 if playlist_env:
@@ -253,6 +260,19 @@ def send_webhook_notification(payload):
         print_warning(f"Webhook unexpected error: {e}")
 
 
+def run_track_hook(playlist_name, track_url):
+    """Ruft das optional konfigurierte Hook-Skript für einen verschobenen/kopierten Track auf."""
+    if not hook_script:
+        return
+
+    try:
+        subprocess.run([hook_script, playlist_name, track_url], timeout=30, check=False)
+    except OSError as e:
+        print_warning(f"Hook script error: {e}")
+    except subprocess.TimeoutExpired:
+        print_warning(f"Hook script timed out: {hook_script}")
+
+
 def load_playlist_history():
     """Load existing playlists from the history file into a set."""
     global PLAYLIST_HISTORY_CACHE
@@ -302,6 +322,15 @@ def get_spotify_client():
     """
     try:
         cache_path = resolve_spotify_cache_path(spotify_cache_path, username)
+
+        if reauth and os.path.isfile(cache_path):
+            try:
+                os.remove(cache_path)
+                print_info(f"Removed cached Spotify token, re-authentication required: {cache_path}")
+            except OSError as e:
+                print_error(f"Could not remove cached token '{cache_path}': {e}")
+                sys.exit(1)
+
         oauth = SpotifyOAuth(
             client_id=client_id,
             client_secret=client_secret,
@@ -334,20 +363,14 @@ def get_spotify_client():
                 code = redirect_response
 
             try:
-                oauth.as_dict = False
-                token_info = oauth.get_access_token(code)
+                token = oauth.get_access_token(code, as_dict=False)
             except Exception as e:
                 print_error(f"Failed to obtain access token: {e}")
                 sys.exit(1)
 
-            if not token_info:
+            if not token:
                 print_error("Unable to obtain token for authentication.")
                 sys.exit(1)
-
-            if isinstance(token_info, dict):
-                token = token_info.get('access_token')
-            else:
-                token = token_info
 
             if not token:
                 print_error("Unable to obtain token for authentication.")
@@ -409,7 +432,7 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
             tracks.extend(results['items'])
 
         # Sort the tracks by year
-        #tracks.sort(key=lambda t: t['track']['album']['release_date'])
+        #tracks.sort(key=lambda t: t['item']['album']['release_date'])
 
         csvFile = None
         csvExport = None
@@ -426,11 +449,11 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
         playlists_by_year = {}
         try:
             for i, track in enumerate(tracks):
-                track_type = track["track"]["type"]
+                track_type = track["item"]["type"]
                 if track_type == "track":
                     # Fetch extra info made currently no sense
-                    # track_info = sp.track(track['track']['id'])
-                    track_info = track['track']
+                    # track_info = sp.track(track['item']['id'])
+                    track_info = track['item']
                     year = track_info['album']['release_date'][:4]
 
                     # Print progress information
@@ -460,7 +483,9 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                                         playlist = sp.user_playlist_create(user=username, name=playlist_key, public=False)
                                         playlists_by_year[playlist_key] = playlist['id']
 
-                    track_uri = track['track']['uri']
+                    track_uri = track['item']['uri']
+                    track_id = track_info.get('id')
+                    track_url = f"https://open.spotify.com/track/{track_id}" if track_id else None
 
                     if export:
                         action = "Would export to CSV" if dry_run else "Export to CSV"
@@ -486,6 +511,8 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                                         'dry_run': True,
                                         'message': f"{artist_name} - {track_name} would {'move' if move else 'copy'} from {playlist_name} to {playlist_key}"
                                     })
+                                if hook_script:
+                                    print(f"[ {bcolors.OKBLUE}Hook{bcolors.ENDC}     ] {progress_label(i+1, len(tracks))} Would call: {hook_script} \"{playlist_name}\" \"{track_url}\"")
                             else:
                                 sp.playlist_add_items(playlists_by_year[playlist_key], [track_uri])
                                 if move:
@@ -505,6 +532,8 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                                         'message': f"{artist_name} - {track_name} {'moved' if move else 'copied'} from {playlist_name} to {playlist_key}"
                                     })
                                 add_playlist_to_history(playlist_key)
+                                if hook_script:
+                                    run_track_hook(playlist_name, track_url)
                                 action = "Move" if move else "Copy"
                                 print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}]")
                         else:
@@ -526,8 +555,8 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                     else:
                         print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Skip missing or unsupported item")
                 else:
-                    artist_name = track["track"]['album']['artists'][0]['name'] if track["track"]['album']['artists'] else 'Unknown Artist'
-                    track_name = track["track"]["name"]
+                    artist_name = track["item"]['album']['artists'][0]['name'] if track["item"]['album']['artists'] else 'Unknown Artist'
+                    track_name = track["item"]["name"]
                     print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} Type {track_type} not supported yet: {artist_name} - {track_name}")
         finally:
             if csvFile is not None:
@@ -711,7 +740,7 @@ def is_track_in_playlist(sp, playlist_id, track_uri):
 
     # Check if track exists in playlist
     for playlist_track in playlist_tracks:
-        if playlist_track['track'] and playlist_track['track']['uri'] == track_uri:
+        if playlist_track['item'] and playlist_track['item']['uri'] == track_uri:
             return True
 
     return False
@@ -722,6 +751,7 @@ export = args_config['export']
 import_csv = args_config.get('import_csv')
 urls_only = args_config.get('urls')
 auth_only = args_config.get('auth_only')
+reauth = args_config.get('reauth')
 
 if urls_only:
     print_playlist_urls()
