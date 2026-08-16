@@ -55,6 +55,7 @@ Important configuration keys (env vars or `config.yaml`):
 - `WEBHOOK_URL`
 - `SPOTIFY_CACHE_PATH` (optional path or directory to persist the OAuth token cache)
 - `TRACK_HOOK_SCRIPT` (optional path to an executable hook script)
+- `PLAYLIST_PATTERN` or `playlist_pattern` (optional naming pattern for target year playlists, must contain `{year}`; default `# Elektronisch - {year}`)
 
 If no `SPOTIFY_CACHE_PATH` is set, the default token cache file will be placed in `~/.cache/.cache-<username>` (or `~/.cache/.cache` if no username).
 
@@ -143,6 +144,7 @@ Common options:
 - `-c`, `--config-path PATH` / `CONFIG_PATH` : path to config file or directory
 - `--cache-path PATH` / `SPOTIFY_CACHE_PATH` : token cache path
 - `--hook-script PATH` / `TRACK_HOOK_SCRIPT` : script called for each moved/copied track (see [Hook script](#hook-script))
+- `--playlist-pattern PATTERN` / `PLAYLIST_PATTERN` : naming pattern for target year playlists, must contain `{year}` (default: `# Elektronisch - {year}`)
 
 `--move` and `--export` are mutually exclusive, and `--import-csv` cannot be combined with either.
 

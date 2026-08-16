@@ -13,3 +13,7 @@ webhook_url: "<optional home assistant webhook URL>"
 #   <script> "<playlist name>" "<spotify track url>"
 # Not called during --dry-run (only a preview line is printed instead).
 track_hook_script: "<optional path to hook script>"
+
+# Optional naming pattern for the target year playlists. Must contain the
+# {year} placeholder. Defaults to "# Elektronisch - {year}".
+playlist_pattern: "# Elektronisch - {year}"

@@ -72,6 +72,7 @@ parser.add_argument("-c", "--config-path", dest="config_path", metavar="PATH", h
 parser.add_argument("--cache-path", dest="cache_path", metavar="PATH", help="path or directory to store Spotify token cache")
 parser.add_argument("--export-dir", dest="export_dir", metavar="DIR", help="directory to write exported CSV files into")
 parser.add_argument("--hook-script", dest="hook_script", metavar="PATH", help="path to an executable script called for each track that is moved or copied, with the playlist name and track URL as arguments")
+parser.add_argument("--playlist-pattern", dest="playlist_pattern", metavar="PATTERN", help="naming pattern for target year playlists, must contain {year} (default: '# Playlist - {year}')")
 args = parser.parse_args()
 args_config = vars(args)
 
@@ -127,6 +128,8 @@ webhook_url = os.environ.get('WEBHOOK_URL') or config.get('webhook_url')
 hook_script = args_config.get('hook_script') or os.environ.get('TRACK_HOOK_SCRIPT') or config.get('track_hook_script')
 if hook_script:
     hook_script = os.path.abspath(os.path.expanduser(hook_script))
+
+playlist_pattern = args_config.get('playlist_pattern') or os.environ.get('PLAYLIST_PATTERN') or config.get('playlist_pattern') or "# Playlist - {year}"
 
 playlist_env = os.environ.get('PLAYLISTS') or os.environ.get('SPOTIFY_PLAYLISTS')
 if playlist_env:
@@ -233,6 +236,16 @@ def validate_configuration():
         print_error('Missing required configuration values:')
         for key in missing:
             print_error(f'  - {key}')
+        sys.exit(1)
+
+    try:
+        playlist_pattern.format(year=2024)
+    except (KeyError, IndexError, ValueError) as e:
+        print_error(f"Invalid playlist_pattern: {playlist_pattern} ({e})")
+        sys.exit(1)
+
+    if '{year}' not in playlist_pattern:
+        print_error(f"Invalid playlist_pattern (must contain '{{year}}'): {playlist_pattern}")
         sys.exit(1)
 
 validate_configuration()
@@ -466,7 +479,7 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
 
                     #genres = get_artist_genre(sp, track_info['artists'][0]['id']) if track_info['artists'] else 'Other'
 
-                    playlist_key = f"# Elektronisch - {year}"
+                    playlist_key = playlist_pattern.format(year=year)
 
                     playlist_create_would = False
                     if process_possible:
@@ -611,7 +624,7 @@ def import_from_csv(csv_file, dry_run):
             print(f"[ {bcolors.FAIL}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks_data))} Skip: Missing Spotify URI for {artist_name} - {track_name}")
             continue
 
-        playlist_key = f"# Elektronisch - {year}"
+        playlist_key = playlist_pattern.format(year=year)
 
         # Check if playlist exists or create it
         if playlist_key not in playlists_by_year:
