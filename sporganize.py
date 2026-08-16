@@ -440,7 +440,7 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
             try:
                 csvFile = open(csvFilename, 'w', encoding='utf-8', newline='')
                 csvExport = csv.writer(csvFile, dialect="excel")
-                csvExport.writerow(["Artist", "Track", "Year", "Spotify Uri"])
+                csvExport.writerow(["Artist", "Track", "Year", "Spotify Uri", "Spotify URL"])
             except OSError as e:
                 print_error(f"Could not open export file '{csvFilename}': {e}")
                 return
@@ -491,7 +491,7 @@ def sort_playlist_by_year(playlist_name: str, dry_run: bool, move: bool, export:
                         action = "Would export to CSV" if dry_run else "Export to CSV"
                         print(f"[ {bcolors.OKGREEN}Track{bcolors.ENDC}    ] {progress_label(i+1, len(tracks))} {action}: {artist_name} - {track_name} [{year}] -> {playlist_key}")
                         if not dry_run and csvExport is not None:
-                            csvExport.writerow([artist_name, track_name, year, track_uri])
+                            csvExport.writerow([artist_name, track_name, year, track_uri, track_url])
                     else:
                         if not playlist_create_would and not is_track_in_playlist(sp, playlists_by_year[playlist_key], track_uri):
                             event_name = "spotify_track_moved" if move else "spotify_track_copied"

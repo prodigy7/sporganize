@@ -172,7 +172,7 @@ The container's entrypoint will by default run `sporganize.py` periodically. To 
 
 - Exported CSVs will be written to the directory given with `--export-dir` or `EXPORT_DIR` and will be created if missing.
 - Created target playlist names are recorded in `playlists.csv` (to keep a list of generated playlists); duplicates are avoided.
-- Both export and `--import-csv` use the same CSV column format: `Artist,Track,Year,Spotify Uri`. This lets you edit an exported file (e.g. fix years or drop rows) and re-import it with `--import-csv`.
+- Exported CSVs have the columns `Artist,Track,Year,Spotify Uri,Spotify URL` (`Spotify URL` is the clickable `https://open.spotify.com/track/<id>` link for the track). `--import-csv` only reads `Artist,Track,Year,Spotify Uri`; the `Spotify URL` column is ignored on import. This lets you edit an exported file (e.g. fix years or drop rows) and re-import it with `--import-csv`.
 
 ## Webhook (Home Assistant example)
 
