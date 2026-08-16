@@ -51,7 +51,7 @@ Important configuration keys (env vars or `config.yaml`):
 - `SPOTIFY_CLIENT_ID`
 - `SPOTIFY_CLIENT_SECRET`
 - `SPOTIFY_USERNAME`
-- `PLAYLISTS` or `SPOTIFY_PLAYLISTS` (comma-separated)
+- `PLAYLISTS` or `SPOTIFY_PLAYLISTS` (comma-separated; can also be passed as one or more positional CLI arguments instead, see [Usage](#usage))
 - `WEBHOOK_URL`
 - `SPOTIFY_CACHE_PATH` (optional path or directory to persist the OAuth token cache)
 - `TRACK_HOOK_SCRIPT` (optional path to an executable hook script)
@@ -121,7 +121,13 @@ Security note:
 Basic usage:
 
 ```bash
-python3 sporganize.py [playlist] [options]
+python3 sporganize.py [playlist ...] [options]
+```
+
+One or more source playlist names can be passed as positional arguments, as an alternative to configuring `spotify_playlists` / `PLAYLISTS`. If any playlist names are given on the command line, they are used instead of the configured ones for that run:
+
+```bash
+python3 sporganize.py "# Elektronisch - Unsortiert" "Some Other Playlist" --dry-run
 ```
 
 Common options:

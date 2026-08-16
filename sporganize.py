@@ -60,7 +60,7 @@ parser = argparse.ArgumentParser(
     description="Utility for sorting spotify playlists by release year",
     formatter_class=argparse.ArgumentDefaultsHelpFormatter
 )
-parser.add_argument("playlist", nargs='?', default="", help="spotify playlist name for parse")
+parser.add_argument("playlist", nargs='*', default=[], help="one or more spotify playlist names to process, as an alternative to the spotify_playlists / PLAYLISTS config")
 parser.add_argument("-e", "--export", action="store_true", help="export track list into csv file")
 parser.add_argument("-i", "--import-csv", dest="import_csv", metavar="FILE", help="import tracks from csv file to playlists")
 parser.add_argument("-n", "--dry-run", action="store_true", help="dry run without modify anything")
@@ -779,7 +779,8 @@ if import_csv:
     # Import mode
     import_from_csv(import_csv, dry_run)
 elif args_config['playlist']:
-    sort_playlist_by_year(args_config['playlist'], dry_run, move, export, export_dir)
+    for playlist in args_config['playlist']:
+        sort_playlist_by_year(playlist, dry_run, move, export, export_dir)
 else:
     for playlist in playlists:
         sort_playlist_by_year(playlist, dry_run, move, export, export_dir)
